@@ -1,3 +1,4 @@
+import config
 from datatypes import Detection
 import cv2
 import time
@@ -12,7 +13,7 @@ import shared
 
 # --- Video Stream Class ---
 class VideoStream:
-    def __init__(self, device_path="/dev/video1"):
+    def __init__(self, device_path=config.VIDEO_DEVICE):
         self.cmd = ['v4l2-ctl', f'--device={device_path}', '--stream-mmap', '--stream-to=-']
         self.proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.frame = None
@@ -68,16 +69,19 @@ def map_bbox_to_frame(bbox, scale_x, scale_y, pad_x, pad_y, frame_w, frame_h):
 
 # --- Main Inference Loop ---
 def inference_loop():
-    interpreter = make_interpreter('traffic_model_edgetpu.tflite')
+    interpreter = make_interpreter(config.MODEL_DETECTOR)
     interpreter.allocate_tensors()
     _, input_height, input_width, _ = interpreter.get_input_details()[0]['shape']
-
-    print("Opening direct kernel stream...")
-    vs = VideoStream(device_path="/dev/video1").start()
+    
+    print(f"Opening direct kernel stream on {config.VIDEO_DEVICE}...")
+    vs = VideoStream(device_path=config.VIDEO_DEVICE).start()
     time.sleep(2.0)
-
-    # Tracker uses max_missing=15 so it doesn't double-count cars that glitch for a few frames
-    active_tracker = tracker.SmartBufferTracker(max_distance=250, max_frames=20, max_missing=15)
+    
+    active_tracker = tracker.SmartBufferTracker(
+        max_distance=config.TRACKER_MAX_DISTANCE, 
+        max_frames=config.TRACKER_MAX_FRAMES, 
+        max_missing=config.TRACKER_MAX_MISSING
+    )
 
     try:
         while True:
@@ -100,11 +104,10 @@ def inference_loop():
                     cv2.rectangle(draw_frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
                     if xmax > xmin and ymax > ymin:
-                        # --- THE CORRECTED 15% MARGIN LOGIC ---
                         w = xmax - xmin
                         h = ymax - ymin
-                        pad_w = int(w * 0.25)
-                        pad_h = int(h * 0.25)
+                        pad_w = int(w * config.CROP_PADDING_RATIO)
+                        pad_h = int(h * config.CROP_PADDING_RATIO)
                         
                         crop_xmin = max(0, xmin - pad_w)
                         crop_ymin = max(0, ymin - pad_h)
@@ -112,7 +115,6 @@ def inference_loop():
                         crop_ymax = min(frame_h, ymax + pad_h)
                         
                         crop_img = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax].copy()
-                        # --------------------------------------
                         
                         det = Detection(
                             bbox=(xmin, ymin, xmax, ymax),
