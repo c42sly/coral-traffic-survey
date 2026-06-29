@@ -1,0 +1,12 @@
+# Ignore Python compiled byte code cache
+__pycache__/
+*.pyc
+
+# Ignore large video footage files
+*.mp4
+*.avi
+*.mkv
+*.raw
+
+# Ignore any hidden backup files created by editors
+*~
