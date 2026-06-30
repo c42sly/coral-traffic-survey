@@ -14,37 +14,59 @@ import shared
 # --- Video Stream Class ---
 class VideoStream:
     def __init__(self, device_path=config.VIDEO_DEVICE):
-        self.cmd = ['v4l2-ctl', f'--device={device_path}', '--stream-mmap', '--stream-to=-']
-        self.proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.device_path = str(device_path)
+        # If it's a local USB camera, use v4l2. Otherwise, use OpenCV for network streams (RTSP/HTTP).
+        self.is_v4l2 = self.device_path.startswith('/dev/video')
         self.frame = None
         self.stopped = False
+        self.proc = None
+        self.cap = None
+
+        if self.is_v4l2:
+            self.cmd = ['v4l2-ctl', f'--device={self.device_path}', '--stream-mmap', '--stream-to=-']
+            self.proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        else:
+            self.cap = cv2.VideoCapture(self.device_path)
 
     def start(self):
         threading.Thread(target=self.update, daemon=True).start()
         return self
 
     def update(self):
-        JPEG_START, JPEG_END = b'\xff\xd8', b'\xff\xd9'
-        buffer = b''
-        while not self.stopped:
-            chunk = self.proc.stdout.read(4096)
-            if not chunk:
-                time.sleep(0.01)
-                continue
-            buffer += chunk
-            start_idx = buffer.find(JPEG_START)
-            end_idx = buffer.find(JPEG_END, start_idx) if start_idx != -1 else -1
-            if start_idx != -1 and end_idx != -1:
-                jpg_data = buffer[start_idx:end_idx + 2]
-                buffer = buffer[end_idx + 2:]
-                np_arr = np.frombuffer(jpg_data, dtype=np.uint8)
-                decoded = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                if decoded is not None: self.frame = decoded
+        if self.is_v4l2:
+            JPEG_START, JPEG_END = b'\xff\xd8', b'\xff\xd9'
+            buffer = b''
+            while not self.stopped:
+                chunk = self.proc.stdout.read(4096)
+                if not chunk:
+                    time.sleep(0.01)
+                    continue
+                buffer += chunk
+                start_idx = buffer.find(JPEG_START)
+                end_idx = buffer.find(JPEG_END, start_idx) if start_idx != -1 else -1
+                if start_idx != -1 and end_idx != -1:
+                    jpg_data = buffer[start_idx:end_idx + 2]
+                    buffer = buffer[end_idx + 2:]
+                    np_arr = np.frombuffer(jpg_data, dtype=np.uint8)
+                    decoded = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                    if decoded is not None: self.frame = decoded
+        else:
+            # RTSP processing loop (drains the buffer to prevent lagging behind live time)
+            while not self.stopped:
+                if self.cap and self.cap.isOpened():
+                    ret, frame = self.cap.read()
+                    if ret:
+                        self.frame = frame
+                    else:
+                        time.sleep(0.05)
+                else:
+                    time.sleep(0.1)
 
     def read(self): return self.frame
     def stop(self):
         self.stopped = True
         if self.proc: self.proc.kill()
+        if self.cap: self.cap.release()
 
 # --- Preprocessing helpers ---
 def preprocess_letterbox(frame, input_width, input_height):
@@ -73,8 +95,9 @@ def inference_loop():
     interpreter.allocate_tensors()
     _, input_height, input_width, _ = interpreter.get_input_details()[0]['shape']
     
-    print(f"Opening direct kernel stream on {config.VIDEO_DEVICE}...")
-    vs = VideoStream(device_path=config.VIDEO_DEVICE).start()
+    current_camera = config.VIDEO_DEVICE
+    print(f"Opening video stream on {current_camera}...")
+    vs = VideoStream(device_path=current_camera).start()
     time.sleep(2.0)
     
     active_tracker = tracker.SmartBufferTracker(
@@ -85,6 +108,17 @@ def inference_loop():
 
     try:
         while True:
+            # --- NEW: Check if camera hot-swap was requested from the Web GUI ---
+            with shared.lock:
+                if hasattr(shared, 'requested_camera_url') and shared.requested_camera_url:
+                    print(f"Hot-swapping camera to: {shared.requested_camera_url}")
+                    vs.stop()
+                    current_camera = shared.requested_camera_url
+                    shared.requested_camera_url = None
+                    vs = VideoStream(device_path=current_camera).start()
+                    time.sleep(1.5) # Give the new stream time to connect
+                    continue # Skip to next loop iteration
+
             frame = vs.read()
             if frame is None: continue
 

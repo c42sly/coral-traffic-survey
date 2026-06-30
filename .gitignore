@@ -10,3 +10,5 @@ __pycache__/
 
 # Ignore any hidden backup files created by editors
 *~
+# Ignore local classification image dumps
+saved_crops/

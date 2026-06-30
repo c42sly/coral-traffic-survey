@@ -2,7 +2,8 @@ import threading
 import time
 import os
 import cv2
-from flask import Flask, jsonify, Response, render_template_string
+import re
+from flask import Flask, jsonify, Response, render_template_string, request
 
 # --- IMPORT YOUR CUSTOM MODULES ---
 import detector
@@ -12,7 +13,12 @@ import shared
 
 app = Flask(__name__)
 final_logs = []
-image_cache = {} # <-- NEW: RAM Cache for the vehicle crops
+image_cache = {} # RAM Cache for the UI vehicle crops
+
+# --- NEW: SD Card Saving Config ---
+SAVE_DIR = os.path.expanduser("~/mnt/server_output")
+os.makedirs(SAVE_DIR, exist_ok=True)
+save_to_sd = False # Global toggle state
 
 def get_sys_stats():
     stats = {"cpu_usage": 0, "cpu_temp": 0, "tpu_temp": 0, "ram_usage": 0}
@@ -37,6 +43,43 @@ def get_sys_stats():
     except: pass
     return stats
 
+# --- Background Worker to Process Results ---
+def results_worker():
+    global save_to_sd
+    print("Background result writer started.")
+    
+    while True:
+        result = results_queue.get()
+        crop = result.pop("crop", None) 
+        
+        # 1. Save to SD Card (If toggled ON)
+        if save_to_sd and crop is not None:
+            # Format: YYYYMMDD_HHMMSS_vid12_classCar_conf85.jpg
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            safe_class = result['class_name'].replace(' ', '')
+            conf = int(result['score'] * 100)
+            
+            filename = f"{timestamp}_vid{result['track_id']}_{safe_class}_conf{conf}.jpg"
+            filepath = os.path.join(SAVE_DIR, filename)
+            
+            cv2.imwrite(filepath, crop)
+            print(f"💾 Saved crop to SD: {filename}")
+
+        # 2. Encode for RAM cache (For Dashboard UI)
+        if crop is not None:
+            ret, jpeg = cv2.imencode('.jpg', crop)
+            if ret:
+                image_cache[str(result["track_id"])] = jpeg.tobytes()
+                
+        final_logs.insert(0, result)
+        
+        # 3. Prevent RAM bloat by only keeping the last 10 in memory
+        if len(final_logs) > 10:
+            oldest = final_logs.pop()
+            old_id = str(oldest["track_id"])
+            if old_id in image_cache:
+                del image_cache[old_id]
+
 # --- HTML Template ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -49,29 +92,54 @@ HTML_TEMPLATE = """
         .grid { display: flex; flex-wrap: wrap; gap: 20px; }
         .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); flex: 1; min-width: 300px; }
         .full-width { width: 100%; margin-bottom: 20px; }
-        button { padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 10px;}
-        .snapshot-img { max-width: 100%; border: 1px solid #ccc; }
         
-        /* NEW: Styles for the crop thumbnails and lists */
+        /* Buttons */
+        .btn { padding: 10px 15px; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 10px; font-weight: bold;}
+        .btn-blue { background: #007bff; }
+        .btn-green { background: #28a745; }
+        .btn-red { background: #dc3545; }
+        
+        .snapshot-img { max-width: 100%; border: 1px solid #ccc; background: #eee; min-height: 200px;}
+        .controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;}
+        
         #results-list { display: flex; flex-direction: column; gap: 10px; }
         .result-card { display: flex; align-items: center; gap: 15px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 6px; }
         .result-thumb { width: 80px; height: 80px; object-fit: cover; border-radius: 4px; border: 1px solid #ccc; background: #eee; }
         .result-info { display: flex; flex-direction: column; gap: 5px;}
+        
+        /* NEW: Settings inputs */
+        .settings-row { display: flex; gap: 10px; margin-top: 10px; margin-bottom: 20px;}
+        .settings-row input { flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
     </style>
 </head>
 <body>
     <h2>Live Traffic Dashboard (Modular V2)</h2>
     
     <div class="panel full-width">
-        <h3>System Diagnostics</h3>
-        <canvas id="sysChart" height="50"></canvas>
+        <div class="controls">
+            <h3>System Diagnostics</h3>
+            <button id="saveToggle" class="btn btn-green" onclick="toggleSave()">💾 Start Saving to SD Card</button>
+        </div>
+        
+        <!-- Camera Settings -->
+        <div class="settings-row">
+            <input type="text" id="cameraUrl" placeholder="Camera Path (e.g. /dev/video1 or rtsp://...)">
+            <button class="btn btn-blue" style="margin:0;" onclick="saveCamera()">Update Camera</button>
+        </div>
+        
+        <canvas id="sysChart" height="40"></canvas>
     </div>
 
     <div class="grid">
         <div class="panel">
-            <h3>Camera Framing Snapshot</h3>
-            <button onclick="updateSnapshot()">Grab Latest Frame</button><br>
-            <img id="snapshot" class="snapshot-img" src="" style="display:none;">
+            <div class="controls">
+                <h3>Live Detector Framing</h3>
+                <label>
+                    <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()"> Auto-Refresh Feed
+                </label>
+            </div>
+            <button class="btn btn-blue" onclick="updateSnapshot()">Grab Single Frame</button><br>
+            <img id="snapshot" class="snapshot-img" src="/snapshot" onerror="this.style.display='none'" onload="this.style.display='block'">
         </div>
 
         <div class="panel" style="flex: 2;">
@@ -81,6 +149,7 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // --- Graph Logic ---
         const ctx = document.getElementById('sysChart').getContext('2d');
         const sysChart = new Chart(ctx, {
             type: 'line',
@@ -112,13 +181,60 @@ HTML_TEMPLATE = """
             });
         }
 
+        // --- Live Feed Logic ---
+        let snapshotInterval = null;
+        
         function updateSnapshot() {
             const img = document.getElementById('snapshot');
-            img.src = '/snapshot?' + new Date().getTime();
-            img.style.display = 'block';
+            img.src = '/snapshot?' + new Date().getTime(); 
         }
 
-        // --- NEW: Display the image and confidence score ---
+        function toggleAutoRefresh() {
+            const checkbox = document.getElementById('autoRefresh');
+            if (checkbox.checked) {
+                snapshotInterval = setInterval(updateSnapshot, 500); 
+            } else {
+                clearInterval(snapshotInterval);
+            }
+        }
+
+        // --- SD Card Toggle Logic ---
+        function updateSaveBtnUI(isSaving) {
+            const btn = document.getElementById('saveToggle');
+            if (isSaving) {
+                btn.innerText = "🛑 Stop Saving to SD Card";
+                btn.className = "btn btn-red";
+            } else {
+                btn.innerText = "💾 Start Saving to SD Card";
+                btn.className = "btn btn-green";
+            }
+        }
+
+        function toggleSave() {
+            fetch('/api/toggle_save', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => updateSaveBtnUI(data.saving));
+        }
+
+        // --- Camera Config Logic ---
+        function loadCameraSettings() {
+            fetch('/api/config/camera').then(r => r.json()).then(data => {
+                document.getElementById('cameraUrl').value = data.url;
+            });
+        }
+
+        function saveCamera() {
+            const newUrl = document.getElementById('cameraUrl').value;
+            fetch('/api/config/camera', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: newUrl })
+            }).then(r => r.json()).then(data => {
+                alert("Camera updated to: " + data.url);
+            });
+        }
+
+        // --- Results Logic ---
         function updateResults() {
             fetch('/api/results').then(r => r.json()).then(data => {
                 const list = document.getElementById('results-list');
@@ -136,6 +252,10 @@ HTML_TEMPLATE = """
             });
         }
 
+        // On Load initialization
+        fetch('/api/save_status').then(r => r.json()).then(data => updateSaveBtnUI(data.saving));
+        loadCameraSettings();
+
         setInterval(updateStats, 2000); 
         setInterval(updateResults, 1000); 
     </script>
@@ -152,32 +272,51 @@ def index():
 def api_stats():
     return jsonify(get_sys_stats())
 
+@app.route('/api/toggle_save', methods=['POST'])
+def api_toggle_save():
+    global save_to_sd
+    save_to_sd = not save_to_sd
+    return jsonify({"saving": save_to_sd})
+
+@app.route('/api/save_status')
+def api_save_status():
+    return jsonify({"saving": save_to_sd})
+
+@app.route('/api/config/camera', methods=['GET', 'POST'])
+def api_camera_config():
+    if request.method == 'POST':
+        new_url = request.json.get('url')
+        if new_url:
+            # 1. Update config.py so it survives reboots
+            try:
+                with open('config.py', 'r') as f:
+                    content = f.read()
+                content = re.sub(r"VIDEO_DEVICE\s*=\s*['\"].*?['\"]", f"VIDEO_DEVICE = '{new_url}'", content)
+                with open('config.py', 'w') as f:
+                    f.write(content)
+            except Exception as e:
+                print("Could not write config.py:", e)
+
+            # 2. Tell the detector thread to hot-swap the camera
+            with shared.lock:
+                shared.requested_camera_url = new_url
+
+            return jsonify({"status": "success", "url": new_url})
+    
+    # GET request (populate the UI input box)
+    try:
+        with open('config.py', 'r') as f:
+            content = f.read()
+        match = re.search(r"VIDEO_DEVICE\s*=\s*['\"](.*?)['\"]", content)
+        current_url = match.group(1) if match else ""
+    except:
+        current_url = ""
+    return jsonify({"url": current_url})
+
 @app.route('/api/results')
 def api_results():
-    while not results_queue.empty():
-        result = results_queue.get()
-        
-        # 1. Pull the raw numpy crop out of the dictionary (so jsonify doesn't crash)
-        crop = result.pop("crop", None) 
-        
-        # 2. Encode it to a JPEG and store it in the RAM cache
-        if crop is not None:
-            ret, jpeg = cv2.imencode('.jpg', crop)
-            if ret:
-                image_cache[str(result["track_id"])] = jpeg.tobytes()
-                
-        final_logs.insert(0, result)
-        
-    # Keep only the last 10 records and clear old images from RAM
-    if len(final_logs) > 10:
-        oldest = final_logs.pop()
-        old_id = str(oldest["track_id"])
-        if old_id in image_cache:
-            del image_cache[old_id]
-            
     return jsonify(final_logs)
 
-# --- NEW ROUTE: Serve the vehicle crops to the dashboard ---
 @app.route('/crop/<track_id>')
 def serve_crop(track_id):
     if track_id in image_cache:
@@ -197,6 +336,11 @@ def snapshot():
 if __name__ == '__main__':
     print("Starting system threads...")
 
+    # Start the Results writer thread
+    writer_thread = threading.Thread(target=results_worker, daemon=True)
+    writer_thread.start()
+
+    # Start the ML threads
     class_thread = threading.Thread(target=classifier.classifier_worker, daemon=True)
     class_thread.start()
 
