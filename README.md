@@ -1,179 +1,26 @@
-This project is an embedded traffic survey system running on a Google Coral Dev Board.
-
-
-
-Current hardware:
-
-- Google Coral Dev Board
-
-- USB UVC camera (currently /dev/video1)
-
-
-
-Current detector:
-
-- EfficientDet-Lite0
-
-- Fully quantized TensorFlow Lite
-
-- Compiled for Edge TPU
-
-- traffic_model_edgetpu.tflite
-
-
-
-Current classifier:
-
-- MobileNetV3 classifier
-
-- Fully quantized
-
-- Compiled for Edge TPU
-
-- traffic_classifier_quant_edgetpu.tflite
-
-
-
-Current software:
-
-- Python
-
-- Flask dashboard
-
-- OpenCV
-
-- PyCoral
-
-- Live MJPEG camera stream
-
-- Detection snapshots
-
-- System diagnostics
-
-
-
-Goal:
-
-
-
-Create a modular application with:
-
-
-
-camera.py
-
-detector.py
-
-classifier.py
-
-tracker.py
-
-dashboard.py
-
-shared.py
-
-config.py
-
-
-
-Architecture:
-
-
-
-Camera
-
-↓
-
-
-
-Detector
-
-
-
-↓
-
-
-
-Crop Queue
-
-
-
-↓
-
-
-
-Classifier
-
-
-
-↓
-
-
-
-Dashboard
-
-
-
-Future versions will include:
-
-
-
-Centroid tracker
-
-Vehicle counting
-
-CSV export
-
-Statistics
-
-Multiple cameras
-
-
-
-The priority is clean modular code that runs efficiently on the Coral Dev Board. 
-
-traffic_v2/
-
-
-
-    app.py              <-- starts everything
-
-
-
-    detector.py         <-- Coral detector thread
-
-
-
-    classifier.py       <-- Coral classifier thread
-
-
-
-    tracker.py          <-- centroid tracker (later)
-
-
-
-    dashboard.py        <-- Flask
-
-
-
-    models.py           <-- loads TPU interpreters
-
-
-
-    camera.py           <-- your VideoStream class
-
-
-
-    preprocess.py       <-- letterbox/stretch code
-
-
-
-    labels.py           <-- label helpers
-
-
-
-    config.py           <-- model names etc.
-
-
-
-    queue_manager.py    <-- queues/shared objects
+# Coral Traffic Survey V2.0
+
+An embedded, low-power traffic survey system running on a Google Coral Dev Board. This system captures live video, detects and classifies vehicles using quantized Edge TPU models, and monitors its own power draw in real-time.
+
+## 🚀 V2.0 Features
+* **Modular Architecture:** Dedicated background threads for camera streaming, detection, classification, and hardware monitoring to maximize Coral CPU/TPU efficiency.
+* **Live Web Dashboard:** A Flask-based web GUI featuring real-time diagnostic charts (CPU/RAM usage, TPU temps, and Wattage) using Chart.js.
+* **Hardware Power Monitoring:** Integrates directly with a UM25C Bluetooth multimeter to track live inference power draw (averaging ~4.5W under full load).
+* **SD Card Logging:** Toggleable UI control to automatically crop and save vehicle detections to the SD card based on confidence thresholds.
+* **Hot-Swappable Camera Setup:** Update video paths (`/dev/video1` or RTSP streams) directly from the web interface without restarting the device.
+
+## 💻 Hardware Requirements
+* Google Coral Dev Board (NXP i.MX 8M SoC)
+* USB UVC Camera
+* UM25C Bluetooth Power Meter (Optional, for power monitoring)
+* 18650 Battery Bank (For remote deployment)
+
+## 🛠️ Power Monitor Setup (UM25C)
+The power monitoring module uses a custom C binary to read data over Bluetooth.
+1. Connect the UM25C via Bluetooth: `sudo rfcomm bind rfcomm0 <MAC_ADDRESS>`
+2. Compile the binary on the Coral board: `gcc -o um25c um25c.c -lm`
+3. Run the main application; `power_monitor.py` will automatically execute the binary and pipe wattage to the web dashboard.
+
+## 🧠 Models
+* **Detector:** EfficientDet-Lite0 (Quantized, Edge TPU)
+* **Classifier:** MobileNetV3 (Quantized, Edge TPU)
