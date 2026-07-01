@@ -10,6 +10,7 @@ import detector
 import classifier
 from queue_manager import results_queue
 import shared
+import power_monitor
 
 app = Flask(__name__)
 final_logs = []
@@ -21,7 +22,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 save_to_sd = False # Global toggle state
 
 def get_sys_stats():
-    stats = {"cpu_usage": 0, "cpu_temp": 0, "tpu_temp": 0, "ram_usage": 0}
+    stats = {"cpu_usage": 0, "cpu_temp": 0, "tpu_temp": 0, "ram_usage": 0, "power_watts": 0.0}
     try:
         with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
             stats["cpu_temp"] = round(int(f.read().strip()) / 1000.0, 1)
@@ -41,6 +42,11 @@ def get_sys_stats():
             mem_available = int(lines[2].split()[1])
             stats["ram_usage"] = round(((mem_total - mem_available) / mem_total) * 100, 1)
     except: pass
+    
+    # Grab the power reading safely using the lock
+    with shared.lock:
+        stats["power_watts"] = getattr(shared, 'current_power_watts', 0.0)
+         
     return stats
 
 # --- Background Worker to Process Results ---
@@ -121,13 +127,12 @@ HTML_TEMPLATE = """
             <button id="saveToggle" class="btn btn-green" onclick="toggleSave()">💾 Start Saving to SD Card</button>
         </div>
         
-        <!-- Camera Settings -->
         <div class="settings-row">
             <input type="text" id="cameraUrl" placeholder="Camera Path (e.g. /dev/video1 or rtsp://...)">
             <button class="btn btn-blue" style="margin:0;" onclick="saveCamera()">Update Camera</button>
         </div>
         
-        <canvas id="sysChart" height="40"></canvas>
+        <canvas id="sysChart" height="60"></canvas>
     </div>
 
     <div class="grid">
@@ -159,7 +164,8 @@ HTML_TEMPLATE = """
                     { label: 'CPU Usage (%)', borderColor: '#007bff', data: [], fill: false, tension: 0.1 },
                     { label: 'RAM Usage (%)', borderColor: '#fd7e14', data: [], fill: false, tension: 0.1 },
                     { label: 'CPU Temp (°C)', borderColor: '#dc3545', data: [], fill: false, tension: 0.1 },
-                    { label: 'TPU Temp (°C)', borderColor: '#28a745', data: [], fill: false, tension: 0.1 }
+                    { label: 'TPU Temp (°C)', borderColor: '#28a745', data: [], fill: false, tension: 0.1 },
+                    { label: 'Power Draw (W)', borderColor: '#6f42c1', data: [], fill: false, tension: 0.1 }
                 ]
             },
             options: { animation: false, scales: { y: { suggestedMin: 0, suggestedMax: 100 } } }
@@ -177,6 +183,7 @@ HTML_TEMPLATE = """
                 sysChart.data.datasets[1].data.push(data.ram_usage);
                 sysChart.data.datasets[2].data.push(data.cpu_temp);
                 sysChart.data.datasets[3].data.push(data.tpu_temp);
+                sysChart.data.datasets[4].data.push(data.power_watts);
                 sysChart.update();
             });
         }
@@ -335,6 +342,10 @@ def snapshot():
 
 if __name__ == '__main__':
     print("Starting system threads...")
+    
+    # Start Power Monitor Thread
+    power_thread = threading.Thread(target=power_monitor.power_worker, daemon=True) 
+    power_thread.start() 
 
     # Start the Results writer thread
     writer_thread = threading.Thread(target=results_worker, daemon=True)
