@@ -28,3 +28,27 @@ The power monitoring module uses a custom C binary to read data over Bluetooth.
 ## 🧠 Models
 * **Detector:** EfficientDet-Lite0 (Quantized, Edge TPU)
 * **Classifier:** MobileNetV3 (Quantized, Edge TPU)
+
+  
+                USB Camera
+                    │
+              or RTSP Stream
+                    │
+                    ▼
+            VideoStream Module
+                    │
+                    ▼
+        EfficientDet-Lite0 (Edge TPU)
+                    │
+                    ▼
+          Smart Vehicle Tracker
+                    │
+                    ▼
+      MobileNetV3 Classifier (Edge TPU)
+                    │
+                    ▼
+      Results Queue / Image Logging
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+    Flask Dashboard      SD Card Logger
