@@ -1,0 +1,29 @@
+Flask==2.2.5
+Werkzeug==2.2.3
+numpy==1.16.2
+opencv-python-headless==4.13.0.92
+
+## Installation
+
+**Hardware Prerequisites:**
+* Google Coral Dev Board (Tested on Mendel Linux)
+* USB UVC Web Camera (e.g., `/dev/video1`)
+
+### 1. Clone the Repository
+Connect to your Coral Dev Board and clone this project:
+
+```bash
+git clone [https://github.com/yourname/coral-traffic-survey.git](https://github.com/yourname/coral-traffic-survey.git)
+cd coral-traffic-survey
+
+sudo apt-get update
+Install System Dependencies
+The Coral Dev Board requires specific system packages for the Edge TPU and video capture. Run the following to install the PyCoral API, TensorFlow Lite runtime, and Video4Linux utilities:
+sudo apt-get install \
+    python3-pip \
+    v4l-utils \
+    python3-pycoral \
+    python3-tflite-runtime
+Install Python Packages
+Install the web dashboard and computer vision dependencies. Note: We use opencv-python-headless to avoid unnecessary GUI bloat on the embedded board.
+pip3 install -r requirements.txt
