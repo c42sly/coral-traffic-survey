@@ -1,6 +1,10 @@
 # Coral Traffic Survey V2.0
 
-An embedded, low-power traffic survey system running on a Google Coral Dev Board. This system captures live video, detects and classifies vehicles using quantized Edge TPU models, and monitors its own power draw in real-time.
+Coral Traffic Survey V2.0
+
+An embedded, low-power traffic survey system built around the Google Coral Dev Board. The system performs real-time vehicle detection, tracking and classification using dual Edge TPU models while operating from battery power. Designed as a modular computer vision platform, it can process live USB or RTSP video streams, provide a live web dashboard, and record vehicle survey data with minimal power consumption.
+
+The project demonstrates that a complete AI vision pipeline—including detection, tracking, classification, live diagnostics and data logging—can run efficiently on the Coral Dev Board using less than 5 W of power, making it suitable for portable roadside surveys and other embedded vision applications.
 
 ## 🚀 V2.0 Features
 * **Modular Architecture:** Dedicated background threads for camera streaming, detection, classification, and hardware monitoring to maximize Coral CPU/TPU efficiency.
