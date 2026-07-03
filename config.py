@@ -7,3 +7,4 @@ TRACKER_MAX_DISTANCE = 300
 TRACKER_MAX_FRAMES = 30
 TRACKER_MAX_MISSING = 40
 CROP_PADDING_RATIO = 0.35  # The 25% margin boost
+SAVE_DIR = "/mnt/server_output/diagnostic_crops"
