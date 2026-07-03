@@ -1,5 +1,7 @@
 import config
 import cv2
+import os
+import time
 import numpy as np
 import threading
 from collections import Counter
@@ -8,25 +10,57 @@ from pycoral.adapters import common, classify
 from pycoral.utils.dataset import read_label_file
 from queue_manager import classifier_batch_queue
 
+# --- Diagnostic crop saving ---
+# Set to True to save best_crop for every finalized vehicle with detector
+# and classifier labels in the filename. After a day's running, sort the
+# saved folder by filename to see patterns: det_LGV_cls_OGV2 etc.
+SAVE_DIAGNOSTIC_CROPS = True
+DIAGNOSTIC_DIR = "/home/mendel/traffic_v2.01/diagnostic_crops"
+
 
 def classifier_worker():
     interpreter = make_interpreter(config.MODEL_CLASSIFIER)
     interpreter.allocate_tensors()
     _, input_height, input_width, _ = interpreter.get_input_details()[0]['shape']
 
-    # Read the model's actual quantization params instead of hardcoding them,
-    # so this keeps working if the model is ever recalibrated/retrained.
     input_details = interpreter.get_input_details()[0]
     scale, zero_point = input_details['quantization']
     print(f"Classifier input quantization -> scale: {scale}, zero_point: {zero_point}")
 
     labels = read_label_file(config.LABELS_FILE)
+
+    # Build a reverse map: detector label int -> readable name.
+    # The detector uses COCO-style integer IDs; map the ones relevant to us.
+    # Update this dict to match your detector model's actual class IDs.
+    detector_label_names = {
+        0: "person",
+        1: "bicycle",
+        2: "car",
+        3: "motorcycle",
+        5: "bus",
+        7: "truck",    # detector likely calls LGV/OGV/HGV all "truck"
+        # add others if your detector has more specific classes
+    }
+
+    if SAVE_DIAGNOSTIC_CROPS:
+        os.makedirs(DIAGNOSTIC_DIR, exist_ok=True)
+        print(f"Diagnostic crops will be saved to: {DIAGNOSTIC_DIR}")
+
     print("Classifier thread waiting for vehicle batches...")
 
     while True:
         payload = classifier_batch_queue.get()
         track_id = payload["track_id"]
         crops = payload["crops"]
+
+        # detector_labels is a list of per-frame detector guesses accumulated
+        # by the tracker. Majority-vote it the same way we vote classifier predictions.
+        raw_detector_labels = payload.get("detector_labels", [])
+        if raw_detector_labels:
+            detector_label_id, _ = Counter(raw_detector_labels).most_common(1)[0]
+            detector_label_name = detector_label_names.get(detector_label_id, f"det{detector_label_id}")
+        else:
+            detector_label_name = "unknown"
 
         predictions = []
         scores = []
@@ -36,13 +70,7 @@ def classifier_worker():
             resized = cv2.resize(crop, (input_width, input_height))
             input_tensor = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
-            # input_tensor is uint8 in [0, 255] (real pixel values).
-            # The model's int8 input tensor expects: quantized = real/scale + zero_point.
-            # Without this step, set_input() just reinterprets the raw uint8 bytes
-            # as int8, which silently corrupts every pixel value.
             if scale == 1.0 and zero_point == 0:
-                # Model genuinely expects raw uint8 reinterpreted as int8 (rare, but
-                # cheap to special-case and skip the float math when it's true).
                 quantized_input = input_tensor.astype(np.int8)
             else:
                 quantized_input = (
@@ -66,7 +94,21 @@ def classifier_worker():
 
             best_crop = crops[len(crops) // 2]
 
-            print(f"✅ Vehicle {track_id} finalized: {class_name.upper()} (conf: {avg_score:.2f})")
+            print(f"✅ Vehicle {track_id} finalized: {class_name.upper()} "
+                  f"(conf: {avg_score:.2f}, det_guess: {detector_label_name})")
+
+            # Save diagnostic crop with both labels in filename
+            if SAVE_DIAGNOSTIC_CROPS and best_crop is not None:
+                timestamp = int(time.time())
+                # Filename pattern: v{id}_det_{detector_guess}_cls_{classifier_guess}_conf{score}.jpg
+                # Sort by det_ or cls_ prefix in a file manager to find patterns.
+                safe_class = class_name.replace(" ", "_")
+                fname = (f"v{track_id:04d}"
+                         f"_det_{detector_label_name}"
+                         f"_cls_{safe_class}"
+                         f"_conf{avg_score:.2f}"
+                         f"_{timestamp}.jpg")
+                cv2.imwrite(os.path.join(DIAGNOSTIC_DIR, fname), best_crop)
 
             from queue_manager import results_queue
             results_queue.put({
@@ -76,5 +118,6 @@ def classifier_worker():
                 "votes": int(votes),
                 "frames": int(len(crops)),
                 "score": float(avg_score),
-                "crop": best_crop
+                "crop": best_crop,
+                "detector_label": detector_label_name,
             })

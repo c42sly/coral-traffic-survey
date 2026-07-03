@@ -1,15 +1,16 @@
 import math
 from collections import OrderedDict
-from datatypes import TrackedVehicle  # Using your new blueprint!
+from datatypes import TrackedVehicle
+
 
 class SmartBufferTracker:
     def __init__(self, max_distance=150, max_frames=20, max_missing=5):
-        self.active_tracks = OrderedDict() # track_id -> TrackedVehicle object
+        self.active_tracks = OrderedDict()  # track_id -> TrackedVehicle object
         self.next_track_id = 0
-        
-        self.max_distance = max_distance  
-        self.max_frames = max_frames      
-        self.max_missing = max_missing    
+
+        self.max_distance = max_distance
+        self.max_frames = max_frames
+        self.max_missing = max_missing
 
     def update(self, detections, current_time):
         """
@@ -66,6 +67,10 @@ class SmartBufferTracker:
             vehicle.crops.append(detections[det_idx].crop)
             vehicle.missing_count = 0
 
+            # Accumulate the detector's per-frame label guess alongside the crop,
+            # so we can majority-vote it later in the classifier, same as crops.
+            vehicle.detector_labels.append(detections[det_idx].detector_label)
+
             matched_det_idxs.add(det_idx)
             matched_track_ids.add(track_id)
 
@@ -78,7 +83,9 @@ class SmartBufferTracker:
                 track_id=self.next_track_id,
                 centroid=(cx, cy),
                 crops=[det.crop],
-                missing_count=0
+                missing_count=0,
+                # Seed detector_labels with the first frame's guess
+                detector_labels=[det.detector_label],
             )
             self.next_track_id += 1
 
@@ -89,10 +96,9 @@ class SmartBufferTracker:
                 if len(vehicle.crops) > 2:
                     completed_tracks.append(vehicle)
                 ready_ids.append(track_id)
-            
+
         # Remove from tracker memory
         for track_id in ready_ids:
             del self.active_tracks[track_id]
 
-        # Return the finished vehicles instead of putting them in a queue directly
         return completed_tracks
