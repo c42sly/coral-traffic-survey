@@ -164,7 +164,8 @@ def inference_loop():
             for vehicle in completed_vehicles:
                 classifier_batch_queue.put({
                     "track_id": vehicle.track_id,
-                    "crops": vehicle.crops
+                    "crops": vehicle.crops,
+                    "detector_labels": vehicle.detector_labels,
                 })
 
             with shared.lock:

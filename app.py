@@ -17,7 +17,8 @@ final_logs = []
 image_cache = {} # RAM Cache for the UI vehicle crops
 
 # --- NEW: SD Card Saving Config ---
-SAVE_DIR = os.path.expanduser("~/mnt/server_output")
+# --- NEW: SD Card Saving Config ---
+SAVE_DIR = "/mnt/server_output"
 os.makedirs(SAVE_DIR, exist_ok=True)
 save_to_sd = False # Global toggle state
 
