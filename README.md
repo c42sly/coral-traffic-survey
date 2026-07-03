@@ -1,54 +1,32 @@
-# Coral Traffic Survey V2.0
+# Coral Traffic Survey V3.0 (Modular Refactor)
 
-Coral Traffic Survey V2.0
+An embedded, low-power traffic survey system built around the Google Coral Dev Board. V3.0 features a completely overhauled modular architecture that decouples core computer vision logic from the web interface for improved fault tolerance and maintainability.
 
-An embedded, low-power traffic survey system built around the Google Coral Dev Board. The system performs real-time vehicle detection, tracking and classification using dual Edge TPU models while operating from battery power. Designed as a modular computer vision platform, it can process live USB or RTSP video streams, provide a live web dashboard, and record vehicle survey data with minimal power consumption.
+## 🏗️ V3.0 Architecture & Module Roles
+The system utilizes a controller-GUI design pattern to safely handle concurrent, multi-threaded pipelines on embedded hardware:
 
-The project demonstrates that a complete AI vision pipeline—including detection, tracking, classification, live diagnostics and data logging—can run efficiently on the Coral Dev Board using less than 5 W of power, making it suitable for portable roadside surveys and other embedded vision applications.
+* **`app.py`**: A minimal application launcher responsible solely for executing the controller thread setup and starting the Flask development server.
+* **`controller.py`**: The central orchestrator of the system. It spawns and manages the lifecycles of background threads (detector, classifier, and results logs), safely aggregates system diagnostics, and mutates shared system configurations.
+* **`web_gui.py`**: A dedicated presentation layer containing all Flask routes and REST API endpoints. It queries shared system states or invokes controller interfaces without directly interfering with thread execution or processing queues.
+* **`shared.py`**: Holds thread-safe global flags, locks, and RAM caches (such as live frames and recent vehicle crops) accessed concurrently by the UI and processing pipelines.
 
-## 🚀 V2.0 Features
-* **Modular Architecture:** Dedicated background threads for camera streaming, detection, classification, and hardware monitoring to maximize Coral CPU/TPU efficiency.
-* **Live Web Dashboard:** A Flask-based web GUI featuring real-time diagnostic charts (CPU/RAM usage, TPU temps, and Wattage) using Chart.js.
-* **Hardware Power Monitoring:** Integrates directly with a UM25C Bluetooth multimeter to track live inference power draw (averaging ~4.5W under full load).
-* **SD Card Logging:** Toggleable UI control to automatically crop and save vehicle detections to the SD card based on confidence thresholds.
-* **Hot-Swappable Camera Setup:** Update video paths (`/dev/video1` or RTSP streams) directly from the web interface without restarting the device.
+* ## 🚦 Usage & Lifecycle
 
-## 💻 Hardware Requirements
-* Google Coral Dev Board (NXP i.MX 8M SoC)
-* USB UVC Camera
-* UM25C Bluetooth Power Meter (Optional, for power monitoring)
-* 18650 Battery Bank (For remote deployment)
+### Startup
+To start the entire application (including backend ML pipelines and the web server), execute the launcher script:
+```bash
+python3 app.py
 
-## 🛠️ Power Monitor Setup (UM25C)
-The power monitoring module uses a custom C binary to read data over Bluetooth.
-1. Connect the UM25C via Bluetooth: `sudo rfcomm bind rfcomm0 <MAC_ADDRESS>`
-2. Compile the binary on the Coral board: `gcc -o um25c um25c.c -lm`
-3. Run the main application; `power_monitor.py` will automatically execute the binary and pipe wattage to the web dashboard.
+🧪 Verifying Endpoints (Testing)
+If the web browser dashboard fails to render, verify that your backend APIs are actively emitting data from the Coral board using `curl`:
 
-## 🧠 Models
-* **Detector:** EfficientDet-Lite0 (Quantized, Edge TPU)
-* **Classifier:** MobileNetV3 (Quantized, Edge TPU)
+```bash
+# Verify system stats data stream
+curl http://localhost:5000/api/stats
 
-  
-                USB Camera
-                    │
-              or RTSP Stream
-                    │
-                    ▼
-            VideoStream Module
-                    │
-                    ▼
-        EfficientDet-Lite0 (Edge TPU)
-                    │
-                    ▼
-          Smart Vehicle Tracker
-                    │
-                    ▼
-      MobileNetV3 Classifier (Edge TPU)
-                    │
-                    ▼
-      Results Queue / Image Logging
-                    │
-          ┌─────────┴─────────┐
-          ▼                   ▼
-    Flask Dashboard      SD Card Logger
+# Verify backend classification queue array
+curl http://localhost:5000/api/results
+
+## 📝 CHANGELOG
+* **V3.0 (Current Refactor):** Complete decoupled refactor. Separated application controller orchestration logic from Flask presentation layer to safeguard multi-threaded performance. Implemented thread-safe memory logging caches and optimized absolute path I/O routing directly to external SD card storage mounts to conserve system flash storage memory.
+* **V2.01 (Previous Stable):** Monolithic single-file runtime pipeline featuring dual Edge TPU inference mapping, tracking, live dashboard integration, and raw diagnostic output.
