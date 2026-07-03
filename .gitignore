@@ -12,3 +12,7 @@ __pycache__/
 *~
 # Ignore local classification image dumps
 saved_crops/
+diagnostic_crops/
+app.log
+um25c
+__pycache__/
