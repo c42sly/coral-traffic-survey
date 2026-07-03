@@ -10,3 +10,5 @@ requested_camera_url = None
 save_to_sd = False
 final_logs = []
 image_cache = {}
+available_classes = {}  # Holds the full dictionary from labels.txt
+allowed_classes = []    # Holds the list of IDs the user wants to track

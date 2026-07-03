@@ -4,6 +4,9 @@ import re
 import config
 import os
 import cv2
+import shutil
+import os
+from flask import send_file # You'll need this passed back to the GUI
 
 _threads = []
 
@@ -13,7 +16,10 @@ if not os.path.exists(SAVE_DIR):
     os.makedirs(SAVE_DIR, exist_ok=True)
 
 def start():
-    """Start detector, classifier, results, (power) threads."""
+    """Start detector, classifier, results, (power) threads, and load labels."""
+    # --- NEW: Actually load the labels into RAM before starting ---
+    load_labels()
+    
     # Detector thread
     det_thread = threading.Thread(target=detector.inference_loop, daemon=True)
     det_thread.start()
@@ -96,6 +102,21 @@ def results_worker():
         result = queue_manager.results_queue.get()
         crop = result.pop("crop", None) 
         
+        # Inject the current time into the result
+        result['timestamp'] = time.strftime("%H:%M:%S")
+        
+        # --- THE BOUNCER (Now Case-Insensitive) ---
+        if hasattr(shared, 'allowed_classes') and hasattr(shared, 'available_classes'):
+            # Convert our allowed list to lowercase
+            allowed_names = [str(shared.available_classes.get(cid)).lower() for cid in shared.allowed_classes]
+            
+            # Convert the AI's guess to lowercase
+            ai_guess = str(result.get('class_name', '')).lower()
+            
+            # If the guess isn't in the list, drop it!
+            if ai_guess not in allowed_names:
+                continue 
+
         # 1. Save to SD Card (If toggled ON)
         if shared.save_to_sd and crop is not None:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -122,3 +143,51 @@ def results_worker():
             old_id = str(oldest["track_id"])
             if old_id in shared.image_cache:
                 del shared.image_cache[old_id]
+
+def toggle_detection():
+    """Toggles the global detection state."""
+    if not hasattr(shared, 'is_detecting'):
+        shared.is_detecting = False # Default to paused on cold boot
+        
+    shared.is_detecting = not shared.is_detecting
+    print(f"Detection state changed to: {shared.is_detecting}")
+    return shared.is_detecting
+
+def create_crops_zip():
+    """Zips the SAVE_DIR and returns the file path."""
+    if not os.path.exists(SAVE_DIR) or not os.listdir(SAVE_DIR):
+        return None
+    
+    # We save the zip to /tmp so it builds in RAM and deletes on reboot
+    zip_base_path = "/tmp/coral_saved_crops"
+    shutil.make_archive(zip_base_path, 'zip', SAVE_DIR)
+    
+    return zip_base_path + ".zip"
+
+def load_labels():
+    """Reads labels.txt and populates the shared available_classes dict."""
+    classes = {}
+    try:
+        with open(config.LABELS_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line: continue
+                # Split "0 car" into key 0, value "car"
+                parts = line.split(maxsplit=1)
+                if len(parts) == 2:
+                    # Strip out any weird formatting if it exists
+                    clean_name = parts[1].replace('', '').strip()
+                    classes[int(parts[0])] = clean_name
+                    
+        shared.available_classes = classes
+        # By default on boot, allow ALL classes
+        shared.allowed_classes = list(classes.keys())
+        print(f"Loaded {len(classes)} classes from {config.LABELS_FILE}")
+    except Exception as e:
+        print(f"Error loading labels: {e}")
+
+def update_allowed_classes(new_list):
+    """Updates the allowed classes list from the web GUI."""
+    shared.allowed_classes = new_list
+    print(f"Tracking classes updated: {shared.allowed_classes}")
+    return True

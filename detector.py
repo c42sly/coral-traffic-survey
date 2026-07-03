@@ -119,6 +119,14 @@ def inference_loop():
                     time.sleep(1.5) # Give the new stream time to connect
                     continue # Skip to next loop iteration
 
+            # --- NEW: Pause Logic ---
+            if not getattr(shared, 'is_detecting', False):
+                # Drain the stream buffer to prevent lag, but skip inference
+                if hasattr(vs, 'read'):
+                    vs.read() 
+                time.sleep(0.1) # Idle the CPU
+                continue
+
             frame = vs.read()
             if frame is None: continue
 
@@ -134,6 +142,10 @@ def inference_loop():
 
             if objs:
                 for obj in objs:
+                    # --- NEW: The Class Filter Bouncer ---
+                    if hasattr(shared, 'allowed_classes') and int(obj.id) not in shared.allowed_classes:
+                        continue  # Skip this object immediately!
+
                     xmin, ymin, xmax, ymax = map_bbox_to_frame(obj.bbox, scale_x, scale_y, pad_x, pad_y, frame_w, frame_h)
                     cv2.rectangle(draw_frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
