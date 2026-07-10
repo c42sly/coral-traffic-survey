@@ -1,0 +1,12 @@
+0  car
+1  person
+2  bicycle
+3  LGV
+4  OGV1
+5  OGV2
+6  motorcycle
+7  Agricultural vehicle
+8  Agricultural trailer
+9  agricultural implement
+10 bus
+11 Trailer

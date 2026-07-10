@@ -69,7 +69,12 @@ HTML_TEMPLATE = """
                 Loading classes...
             </div>
         </div>
-        
+        <div style="display: flex; gap: 15px; margin-bottom: 10px; font-size: 13px; background: #f8f9fa; padding: 10px; border-radius: 6px; border: 1px solid #e2e8f0; flex-wrap: wrap;">
+             <div><strong>🖥️ CPU Usage:</strong> Min: <span id="cpu_min">-</span>% | Max: <span id="cpu_max">-</span>% | Avg: <span id="cpu_avg">-</span>%</div>
+             <div><strong>💾 RAM Usage:</strong> Min: <span id="ram_min">-</span>% | Max: <span id="ram_max">-</span>% | Avg: <span id="ram_avg">-</span>%</div>
+             <div><strong>🔥 CPU Temp:</strong> Max: <span id="temp_max">-</span>°C</div>
+             <div><strong>⚡ Power:</strong> Avg: <span id="pwr_avg">-</span>W</div>
+        </div>
         <canvas id="sysChart" height="60"></canvas>
     </div>
 
@@ -115,6 +120,15 @@ HTML_TEMPLATE = """
             options: { animation: false, scales: { y: { suggestedMin: 0, suggestedMax: 100 } } }
         });
 
+        function calculateMetrics(arr) {
+            if (!arr || arr.length === 0) return { min: 0, max: 0, avg: 0 };
+            const min = Math.min(...arr);
+            const max = Math.max(...arr);
+            const sum = arr.reduce((a, b) => a + b, 0);
+            const avg = sum / arr.length;
+            return { min: min.toFixed(1), max: max.toFixed(1), avg: avg.toFixed(1) };
+        }
+
         function updateStats() {
             fetch('/api/stats').then(r => r.json()).then(data => {
                 const now = new Date().toLocaleTimeString();
@@ -129,6 +143,23 @@ HTML_TEMPLATE = """
                 sysChart.data.datasets[3].data.push(data.tpu_temp);
                 sysChart.data.datasets[4].data.push(data.power_watts);
                 sysChart.update();
+
+                // Calculate and update the UI container live metrics
+                const cpuMetrics = calculateMetrics(sysChart.data.datasets[0].data);
+                const ramMetrics = calculateMetrics(sysChart.data.datasets[1].data);
+                const tempMetrics = calculateMetrics(sysChart.data.datasets[2].data);
+                const pwrMetrics = calculateMetrics(sysChart.data.datasets[4].data);
+
+                document.getElementById('cpu_min').innerText = cpuMetrics.min;
+                document.getElementById('cpu_max').innerText = cpuMetrics.max;
+                document.getElementById('cpu_avg').innerText = cpuMetrics.avg;
+
+                document.getElementById('ram_min').innerText = ramMetrics.min;
+                document.getElementById('ram_max').innerText = ramMetrics.max;
+                document.getElementById('ram_avg').innerText = ramMetrics.avg;
+
+                document.getElementById('temp_max').innerText = tempMetrics.max;
+                document.getElementById('pwr_avg').innerText = pwrMetrics.avg;
             });
         }
 
@@ -399,6 +430,10 @@ def api_classes():
             "available": getattr(shared, 'available_classes', {}),
             "allowed": getattr(shared, 'allowed_classes', [])
         })
+
+@app.route('/api/save_status')
+def api_save_status():
+    return jsonify({"saving": getattr(shared, 'save_to_sd', False)})
 
 @app.route('/')
 def index():

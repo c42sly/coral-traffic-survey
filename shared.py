@@ -2,6 +2,7 @@ import threading
 
 # Global locks and frames
 lock = threading.Lock()
+stop_event = threading.Event()
 latest_frame = None
 
 # Holds a new camera URL if the user updates it from the web GUI

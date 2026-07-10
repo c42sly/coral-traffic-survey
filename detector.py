@@ -1,6 +1,7 @@
 import config
 from datatypes import Detection
 import cv2
+import os
 import time
 import threading
 import subprocess
@@ -75,8 +76,15 @@ def preprocess_letterbox(frame, input_width, input_height):
     new_w = int(round(frame_w * scale))
     new_h = int(round(frame_h * scale))
     resized = cv2.resize(frame, (new_w, new_h))
-    pad_x = (input_width - new_w) // 2
-    pad_y = (input_height - new_h) // 2
+    # Anchored top-left (0,0), padding only the bottom/right - matches
+    # EfficientDet's actual train/eval preprocessing (InputProcessor in
+    # the Model Maker source: crop_offset defaults to 0,0 and
+    # pad_to_bounding_box places the scaled image at (0,0)). A CENTERED
+    # letterbox here would train/inference-mismatch every detection,
+    # since the box head learned coordinates relative to top-left
+    # placement, not centered placement.
+    pad_x = 0
+    pad_y = 0
     canvas = np.zeros((input_height, input_width, 3), dtype=np.uint8)
     canvas[pad_y:pad_y + new_h, pad_x:pad_x + new_w] = resized
     input_frame = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
@@ -107,7 +115,7 @@ def inference_loop():
     )
 
     try:
-        while True:
+        while not shared.stop_event.is_set():
             # --- NEW: Check if camera hot-swap was requested from the Web GUI ---
             with shared.lock:
                 if hasattr(shared, 'requested_camera_url') and shared.requested_camera_url:
@@ -135,16 +143,19 @@ def inference_loop():
 
             common.set_input(interpreter, input_frame)
             interpreter.invoke()
-            objs = detect.get_objects(interpreter, score_threshold=0.5)
+            objs = detect.get_objects(interpreter, score_threshold=getattr(config, 'DETECTOR_SCORE_THRESHOLD', 0.5))
 
             current_detections = []
             draw_frame = frame.copy()
 
             if objs:
                 for obj in objs:
+                    if getattr(config, 'DEBUG_PRINT_DETECTIONS', False):
+                        print(f"[detector raw] id={int(obj.id)} score={obj.score:.2f}")
+
                     # --- NEW: The Class Filter Bouncer ---
-                    if hasattr(shared, 'allowed_classes') and int(obj.id) not in shared.allowed_classes:
-                        continue  # Skip this object immediately!
+                    if hasattr(shared, 'allowed_detector_ids') and int(obj.id) not in shared.allowed_detector_ids:
+                        continue
 
                     xmin, ymin, xmax, ymax = map_bbox_to_frame(obj.bbox, scale_x, scale_y, pad_x, pad_y, frame_w, frame_h)
                     cv2.rectangle(draw_frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
@@ -170,7 +181,7 @@ def inference_loop():
                         )
                         current_detections.append(det)
 
-            completed_vehicles = active_tracker.update(current_detections, time.time())
+            completed_vehicles, discarded_vehicles = active_tracker.update(current_detections, time.time())
 
             from queue_manager import classifier_batch_queue
             for vehicle in completed_vehicles:
@@ -179,6 +190,21 @@ def inference_loop():
                     "crops": vehicle.crops,
                     "detector_labels": vehicle.detector_labels,
                 })
+
+            # Debug: save discarded (too-short) tracks' crops so flicker/false
+            # positives/fragmented tracks can actually be looked at, since they
+            # never reach the classifier and would otherwise leave no trace.
+            if getattr(config, 'SAVE_DISCARDED_CROPS', False) and discarded_vehicles:
+                discard_dir = getattr(config, 'DISCARDED_CROPS_DIR', 'discarded_crops')
+                os.makedirs(discard_dir, exist_ok=True)
+                for vehicle in discarded_vehicles:
+                    for i, crop in enumerate(vehicle.crops):
+                        if crop is None or crop.size == 0:
+                            continue
+                        label_guess = (vehicle.detector_labels[i]
+                                       if i < len(vehicle.detector_labels) else "unknown")
+                        fname = f"discard_v{vehicle.track_id:04d}_crop{i}_det{label_guess}.jpg"
+                        cv2.imwrite(os.path.join(discard_dir, fname), crop)
 
             with shared.lock:
                 shared.latest_frame = draw_frame

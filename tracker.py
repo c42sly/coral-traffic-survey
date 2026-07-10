@@ -15,7 +15,11 @@ class SmartBufferTracker:
     def update(self, detections, current_time):
         """
         detections: list of Detection dataclass objects
-        Returns: list of completed TrackedVehicle dataclass objects
+        Returns: (completed_tracks, discarded_tracks) — both lists of TrackedVehicle.
+        completed_tracks have enough crops (>2) to send to the classifier.
+        discarded_tracks timed out with too few crops (likely flicker/false positive,
+        or a real vehicle that fragmented into a new track id) — kept only for
+        debug inspection, never sent to the classifier.
         """
         completed_tracks = []
 
@@ -91,14 +95,26 @@ class SmartBufferTracker:
 
         # 3. Check for Triggers
         ready_ids = []
+        discarded_tracks = []
         for track_id, vehicle in self.active_tracks.items():
             if len(vehicle.crops) >= self.max_frames or vehicle.missing_count > self.max_missing:
                 if len(vehicle.crops) > 2:
                     completed_tracks.append(vehicle)
+                else:
+                    # Too few crops to bother classifying. Could be flicker/a false
+                    # positive, or a real vehicle that got re-matched under a *new*
+                    # track id after moving further than max_distance in one frame.
+                    # Surface it (with its crops) instead of silently dropping it,
+                    # so it can actually be inspected.
+                    discarded_tracks.append(vehicle)
+                    print(f"🗑️  Track {track_id} discarded: {len(vehicle.crops)} crop(s), "
+                          f"missing {vehicle.missing_count}/{self.max_missing} frames, "
+                          f"last centroid {vehicle.centroid}, "
+                          f"detector guesses: {vehicle.detector_labels}")
                 ready_ids.append(track_id)
 
         # Remove from tracker memory
         for track_id in ready_ids:
             del self.active_tracks[track_id]
 
-        return completed_tracks
+        return completed_tracks, discarded_tracks

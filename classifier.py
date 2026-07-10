@@ -2,6 +2,7 @@ import config
 import cv2
 import os
 import time
+import queue
 import numpy as np
 import threading
 from collections import Counter
@@ -9,13 +10,14 @@ from pycoral.utils.edgetpu import make_interpreter
 from pycoral.adapters import common, classify
 from pycoral.utils.dataset import read_label_file
 from queue_manager import classifier_batch_queue
+import shared
 
 # --- Diagnostic crop saving ---
 # Set to True to save best_crop for every finalized vehicle with detector
 # and classifier labels in the filename. After a day's running, sort the
 # saved folder by filename to see patterns: det_LGV_cls_OGV2 etc.
 SAVE_DIAGNOSTIC_CROPS = True
-DIAGNOSTIC_DIR = "/home/mendel/traffic_v2.01/diagnostic_crops"
+DIAGNOSTIC_DIR = "/mnt/server_output/diagnostic_crops"
 
 
 def classifier_worker():
@@ -29,18 +31,9 @@ def classifier_worker():
 
     labels = read_label_file(config.LABELS_FILE)
 
-    # Build a reverse map: detector label int -> readable name.
-    # The detector uses COCO-style integer IDs; map the ones relevant to us.
-    # Update this dict to match your detector model's actual class IDs.
-    detector_label_names = {
-        0: "person",
-        1: "bicycle",
-        2: "car",
-        3: "motorcycle",
-        5: "bus",
-        7: "truck",    # detector likely calls LGV/OGV/HGV all "truck"
-        # add others if your detector has more specific classes
-    }
+    # Detector uses a SEPARATE label ordering from the classifier.
+    # Read its own label mapping from config rather than reusing `labels`.
+    detector_label_names = config.DETECTOR_LABELS
 
     if SAVE_DIAGNOSTIC_CROPS:
         os.makedirs(DIAGNOSTIC_DIR, exist_ok=True)
@@ -48,8 +41,12 @@ def classifier_worker():
 
     print("Classifier thread waiting for vehicle batches...")
 
-    while True:
-        payload = classifier_batch_queue.get()
+    while not shared.stop_event.is_set():
+        try:
+            payload = classifier_batch_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue  # just gives us a chance to re-check stop_event
+
         track_id = payload["track_id"]
         crops = payload["crops"]
 
